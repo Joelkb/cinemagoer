@@ -26,10 +26,10 @@ http://www.imdb.com/chart/top
 http://www.imdb.com/chart/bottom
 """
 
-from __future__ import absolute_import, division, print_function, unicode_literals
-import re
+from imdb.parser.http import jextr
 from imdb.utils import analyze_title
 
+from . import jsel
 from .piculet import Path, Rule, Rules, reducers
 from .utils import DOMParserBase, analyze_imdbid
 
@@ -40,86 +40,36 @@ class DOMHTMLTop250Parser(DOMParserBase):
 
     rules = [
         Rule(
-            key='chart',
-            extractor=Rules(
-                foreach='//ul[contains(@class, "ipc-metadata-list")]/li',
-                rules=[
-                    Rule(
-                        key='movieID',
-                        extractor=Path('.//a[contains(@class, "ipc-title-link-wrapper")]/@href', reduce=reducers.first)
-                    ),
-                    Rule(
-                        key='title',
-                        extractor=Path('.//h3[contains(@class, "ipc-title__text")]//text()')
-                    ),
-                    Rule(
-                        key='rating',
-                        extractor=Path('.//span[contains(@class, "ipc-rating-star")]//text()',
-                                       reduce=reducers.first,
-                                       transform=lambda x: round(float(x), 1))
-                    ),
-                    Rule(
-                        key='year',
-                        extractor=Path('.//div[contains(@class, "cli-title-metadata")]/span/text()',
-                                       reduce=reducers.first)
-                    ),
-                    Rule(
-                        key='votes',
-                        extractor=Path('.//span[contains(@class, "ipc-rating-star--voteCount")]//text()')
-                    )
-                ]
+            key='__NEXT_DATA__',
+            extractor=Path(
+                '//script[@id="__NEXT_DATA__"]/text()',
+                reduce=reducers.first,
+                transform=lambda x: x.strip()
             )
         )
     ]
 
     def postprocess_data(self, data):
-        if (not data) or ('chart' not in data):
+        if '__NEXT_DATA__' not in data:
             return []
-        _re_rank = re.compile('(\d+)\.(.+)')
-        _re_votes = re.compile('([0-9\.]+)([kmb])', re.I)
         movies = []
-        for count, entry in enumerate(data['chart']):
-            if ('movieID' not in entry) or ('title' not in entry):
+        jdata = jsel.select(data['__NEXT_DATA__'], '.props.pageProps.pageData.chartTitles.edges')
+        if not jdata:
+            return []
+        for item in jdata:
+            mdata = {}
+            node = item.get('node', {})
+            if not node:
                 continue
-            entry['rank'] = count + 1
-            rank_match = _re_rank.match(entry['title'])
-            if rank_match and len(rank_match.groups()) == 2:
-                try:
-                    entry['rank'] = int(rank_match.group(1))
-                except Exception:
-                    pass
-                entry['title'] = rank_match.group(2).strip()
-
-            movie_id = analyze_imdbid(entry['movieID'])
-            if movie_id is None:
+            mdata = jextr.movie_data(node)
+            if not mdata:
                 continue
-            del entry['movieID']
-            entry[self.ranktext] = entry['rank']
-            del entry['rank']
-            title = entry['title']
-            if 'year' in entry:
-                title = entry['title'] + ' (%s)' % entry['year']
-                del entry['year']
-            title = analyze_title(title)
-            entry.update(title)
-            if 'votes' in entry:
-                votes = entry['votes'].replace('(', '').replace(')', '').replace('\xa0', '')
-                multiplier = 1
-                votes_match = _re_votes.match(votes)
-                if votes_match and len(votes_match.groups()) == 2:
-                    votes = votes_match.group(1)
-                    str_multiplier = votes_match.group(2).lower()
-                    if str_multiplier == 'k':
-                        multiplier = 1000
-                    elif str_multiplier == 'm':
-                        multiplier = 1000 * 1000
-                    elif str_multiplier == 'b':
-                        multiplier = 1000 * 1000 * 1000
-                try:
-                    entry['votes'] = int(float(votes) * multiplier)
-                except Exception:
-                    pass
-            movies.append((movie_id, entry))
+            rank = item.get('currentRank', None)
+            if rank:
+                mdata[self.ranktext] = rank
+            movie_id = mdata['id']
+            del mdata['id']
+            movies.append((movie_id, mdata))
         return movies
 
 
@@ -146,37 +96,72 @@ class DOMHTMLTVTop250Parser(DOMHTMLTop250Parser):
 class DOMHTMLTopIndian250Parser(DOMHTMLTop250Parser):
     """A parser for the "Top Rated Indian Movies" page."""
     ranktext = 'top indian 250 rank'
+    rules = [
+        Rule(
+            key='chart',
+            extractor=Rules(
+                foreach='//ul[contains(@class, "ipc-metadata-list")]/li',
+                rules=[
+                    Rule(
+                        key='movieID',
+                        extractor=Path('.//a[contains(@class, "ipc-metadata-list-item__icon-link")]/@href', reduce=reducers.first)
+                    ),
+                    Rule(
+                        key='title',
+                        extractor=Path('.//span[contains(@data-testid, "rank-list-item-title")]/text()')
+                    ),
+                    Rule(
+                        key='rating',
+                        extractor=Path('.//span[contains(@class, "ipc-rating-star")]//text()',
+                                       reduce=reducers.first,
+                                       transform=lambda x: round(float(x), 1))
+                    )
+                ]
+            )
+        )
+    ]
+
+    def postprocess_data(self, data):
+        if (not data) or ('chart' not in data):
+            return []
+        movies = []
+        for count, entry in enumerate(data['chart']):
+            if ('movieID' not in entry) or ('title' not in entry):
+                continue
+            movie_id = analyze_imdbid(entry['movieID'])
+            entry[self.ranktext] = count + 1
+            movies.append((movie_id, entry))
+        return movies
 
 
 class DOMHTMLBoxOfficeParser(DOMParserBase):
     """A parser for the "top boxoffice movies" page."""
     ranktext = 'top box office rank'
-
     rules = [
         Rule(
             key='chart',
             extractor=Rules(
-                foreach='//tbody/tr',
+                foreach='//ul[contains(@class, "ipc-metadata-list")]/li',
                 rules=[
                     Rule(
                         key='movieID',
-                        extractor=Path('./td[@class="titleColumn"]/a/@href', reduce=reducers.first)
+                        extractor=Path('.//a[contains(@class, "ipc-title-link-wrapper")]/@href', reduce=reducers.first)
                     ),
                     Rule(
                         key='title',
-                        extractor=Path('./td[@class="titleColumn"]/a/text()')
+                        extractor=Path('.//h3[contains(@class, "ipc-title__text")]/text()', reduce=reducers.first)
                     ),
                     Rule(
                         key='weekend',
-                        extractor=Path('./td[@class="ratingColumn"]/text()')
+                        extractor=Path('.//span[contains(@class, "sc-3a4309f8-0") and contains(@data-testid, "boxoffice-weekend-gross-to-date")]/text()', reduce=reducers.first)
                     ),
                     Rule(
                         key='gross',
-                        extractor=Path('./td[@class="ratingColumn"]/span[@class="secondaryInfo"]/text()')
+                        extractor=Path('.//span[contains(@class, "sc-3a4309f8-0") and contains(@data-testid, "boxoffice-total-gross-to-date")]/text()', reduce=reducers.first)
                     ),
                     Rule(
                         key='weeks',
-                        extractor=Path('./td[@class="weeksColumn"]/text()')
+                        extractor=Path('.//span[contains(@class, "sc-3a4309f8-0") and contains(@data-testid, "boxoffice-week-in-release")]/text()', reduce=reducers.first)
                     ),
                 ]
             )
@@ -188,7 +173,7 @@ class DOMHTMLBoxOfficeParser(DOMParserBase):
             return []
 
         movies = []
-        for entry in data['chart']:
+        for count, entry in enumerate(data['chart']):
             if ('movieID' not in entry) or ('title' not in entry):
                 continue
 
@@ -199,8 +184,15 @@ class DOMHTMLBoxOfficeParser(DOMParserBase):
 
             title = analyze_title(entry['title'])
             entry.update(title)
-            weekend = entry['weekend'].lstrip().rstrip()
-            entry.update({'weekend': weekend})
+            entry[self.ranktext] = count + 1
+
+            # Clean up fields
+            if 'weekend' in entry and entry['weekend']:
+                entry['weekend'] = entry['weekend'].strip()
+            if 'gross' in entry and entry['gross']:
+                entry['gross'] = entry['gross'].strip()
+            if 'weeks' in entry and entry['weeks']:
+                entry['weeks'] = entry['weeks'].strip()
 
             movies.append((movie_id, entry))
         return movies

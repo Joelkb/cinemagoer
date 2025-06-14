@@ -24,18 +24,21 @@ called with the ``accessSystem`` argument is set to "http" or "web"
 or "html" (this is the default).
 """
 
-from __future__ import absolute_import, division, print_function, unicode_literals
-
-import socket
 import ssl
 import warnings
 from codecs import lookup
+from urllib.parse import quote_plus
+from urllib.request import (
+    HTTPRedirectHandler,
+    HTTPSHandler,
+    ProxyHandler,
+    build_opener,
+)
 
-from imdb import PY2, IMDbBase
+from imdb import IMDbBase
 from imdb._exceptions import IMDbDataAccessError, IMDbParserError
 from imdb.parser.http.logging import logger
 from imdb.utils import analyze_title
-
 from . import (
     companyParser,
     listParser,
@@ -47,15 +50,8 @@ from . import (
     searchMovieParser,
     searchPersonParser,
     showtimesParser,
-    topBottomParser
+    topBottomParser,
 )
-
-if PY2:
-    from urllib import quote_plus
-    from urllib2 import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, build_opener  # noqa: I003
-else:
-    from urllib.parse import quote_plus
-    from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, build_opener
 
 # Logger for miscellaneous functions.
 _aux_logger = logger.getChild('aux')
@@ -91,7 +87,7 @@ class _ModuleProxy:
         return getattr(_sm, name)
 
 
-class _FakeURLOpener(object):
+class _FakeURLOpener:
     """Fake URLOpener object, used to return empty strings instead of
     errors.
     """
@@ -116,7 +112,7 @@ class IMDbHTTPSHandler(HTTPSHandler, object):
         context = ssl.create_default_context()
         context.check_hostname = False
         context.verify_mode = ssl.CERT_NONE
-        super(IMDbHTTPSHandler, self).__init__(context=context)
+        super().__init__(context=context)
 
     def http_error_default(self, url, fp, errcode, errmsg, headers):
         if errcode == 404:
@@ -156,7 +152,7 @@ class IMDbHTTPRedirectHandler(HTTPRedirectHandler):
         # force handling of redirect 308
         req.code = 302
         code = 302
-        return super(IMDbHTTPRedirectHandler, self).http_error_302(req, fp, code, msg, headers)
+        return super().http_error_302(req, fp, code, msg, headers)
 
 
 class IMDbURLopener:
@@ -211,7 +207,7 @@ class IMDbURLopener:
                 del self.addheaders[index]
                 break
 
-    def retrieve_unicode(self, url, size=-1):
+    def retrieve_unicode(self, url, size=-1, timeout=None):
         """Retrieves the given URL, and returns a unicode string,
         trying to guess the encoding of the data (assuming utf8
         by default)"""
@@ -230,14 +226,11 @@ class IMDbURLopener:
             handlers.append(self.https_handler)
             uopener = build_opener(*handlers)
             uopener.addheaders = list(self.addheaders)
-            response = uopener.open(url)
+            response = uopener.open(url, timeout=timeout)
             content = response.read()
             self._last_url = response.url
             # Maybe the server is so nice to tell us the charset...
-            if PY2:
-                server_encode = response.headers.getparam('charset') or None
-            else:
-                server_encode = response.headers.get_content_charset(None)
+            server_encode = response.headers.get_content_charset(None)
             # Otherwise, look at the content-type HTML meta tag.
             if server_encode is None and content:
                 begin_h = content.find(b'text/html; charset=')
@@ -289,7 +282,7 @@ class IMDbHTTPAccessSystem(IMDbBase):
         self.urlOpener = IMDbURLopener(*arguments, **keywords)
         self._getRefs = True
         self._mdparse = False
-        self.set_timeout(timeout)
+        self.timeout = timeout
         if proxy != -1:
             self.set_proxy(proxy)
         _def = {'_modFunct': self._defModFunct, '_as': self.accessSystem}
@@ -360,16 +353,6 @@ class IMDbHTTPAccessSystem(IMDbBase):
         """
         self.urlOpener.set_proxy(proxy)
 
-    def set_timeout(self, timeout):
-        """Set the default timeout, in seconds, of the connection."""
-        try:
-            timeout = int(timeout)
-        except Exception:
-            timeout = 0
-        if timeout <= 0:
-            timeout = None
-        socket.setdefaulttimeout(timeout)
-
     def set_cookies(self, cookie_id, cookie_uu):
         """Set a cookie to access an IMDb's account."""
         warnings.warn("set_cookies has been deprecated")
@@ -389,9 +372,7 @@ class IMDbHTTPAccessSystem(IMDbBase):
     def _retrieve(self, url, size=-1, _noCookies=False):
         """Retrieve the given URL."""
         self._http_logger.debug('fetching url %s (size: %d)', url, size)
-        ret = self.urlOpener.retrieve_unicode(url, size=size)
-        if PY2 and isinstance(ret, str):
-            ret = ret.decode('utf-8')
+        ret = self.urlOpener.retrieve_unicode(url, size=size, timeout=self.timeout)
         return ret
 
     def _get_search_content(self, kind, ton, results):
@@ -400,10 +381,7 @@ class IMDbHTTPAccessSystem(IMDbBase):
         or 'co' (for companies).
         ton is the title or the name to search.
         results is the maximum number of results to be retrieved."""
-        if PY2:
-            params = 'q=%s&s=%s' % (quote_plus(ton, safe=''.encode('utf8')), kind.encode('utf8'))
-        else:
-            params = 'q=%s&s=%s' % (quote_plus(ton, safe=''), kind)
+        params = 'q=%s&s=%s' % (quote_plus(ton, safe=''), kind)
         if kind == 'ep':
             params = params.replace('s=ep&', 's=tt&ttype=ep&', 1)
         cont = self._retrieve(self.urls['find'] % params)
@@ -651,7 +629,7 @@ class IMDbHTTPAccessSystem(IMDbBase):
                 cont = self._retrieve(
                     self.urls['movie_main'] % movieID + 'episodes?season=' + str(season)
                 )
-            except:
+            except Exception:
                 pass
             other_d = self.mProxy.season_episodes_parser.parse(cont)
             other_d = self._purge_seasons_data(other_d)
@@ -660,7 +638,7 @@ class IMDbHTTPAccessSystem(IMDbBase):
             try:
                 if not (other_d and other_d['data'] and other_d['data']['episodes'][season]):
                     continue
-            except:
+            except Exception:
                 pass
             nr_eps += len(other_d['data']['episodes'].get(season) or [])
             if data_d:

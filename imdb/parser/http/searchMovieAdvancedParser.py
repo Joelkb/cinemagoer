@@ -1,5 +1,3 @@
-# -*- coding: utf-8 -*-
-
 # Copyright 2019 H. Turgut Uyar <uyar@tekir.org>
 #
 # This program is free software; you can redistribute it and/or modify
@@ -26,17 +24,16 @@ would be:
 http://www.imdb.com/search/title/?title=the+passion
 """
 
-from __future__ import absolute_import, division, print_function, unicode_literals
-
 import re
 
-from .piculet import Path, Rule, Rules, preprocessors, reducers
-from .utils import DOMParserBase, analyze_imdbid, build_movie, build_person
+from . import jsel
+from .piculet import Path, Rule, Rules, reducers
+from .utils import DOMParserBase, analyze_imdbid, build_movie
 
-_re_secondary_info = re.compile(
-    r'''(\(([IVXLCM]+)\)\s+)?\((\d{4})(–(\s|(\d{4})))?(\s+(.*))?\)|(\(([IVXLCM]+)\))'''
-)
+# regular expression to match duration in the format like "1h 30m"
+_re_duration = re.compile(r'(?:(\d+)h)?\s*(?:(\d+)?m)?')
 
+_re_index = re.compile(r'(\d+)\.\s+(.+)')
 
 _KIND_MAP = {
     'tv short': 'tv short movie',
@@ -44,26 +41,55 @@ _KIND_MAP = {
 }
 
 
+def cleanup_title(title):
+    """Cleanup the title string by removing the index and leading/trailing spaces."""
+    if title:
+        match = _re_index.match(title)
+        if match:
+            return match.group(2).strip()
+    return title.strip() if title else title
+
+
 def _parse_secondary_info(info):
     parsed = {}
-    match = _re_secondary_info.match(info)
-    kind = None
-    if match.group(2):
-        parsed['imdbIndex'] = match.group(2)
-    if match.group(3):
-        parsed['year'] = int(match.group(3))
-    if match.group(4):
-        kind = 'tv series'
-    if match.group(6):
-        parsed['series years'] = match.group(3) + "-" + match.group(6)
-    if match.group(8):
-        kind = match.group(8).lower()
-    if match.group(10):  # Added to support case of imdbIndex but no year
-        parsed['imdbIndex'] = match.group(10)
-    if kind is None:
-        kind = 'movie'
-    parsed['kind'] = _KIND_MAP.get(kind, kind)
+    info = info or ''
+    _certs = set(('pg-13', 'pg', 'r', 'g', 'nc-17', 'unrated', 'approved',
+                 'not rated', 'm', 'x', 'tv-ma', 'tv-pg', 'tv-14', 'vm', 'vm-14',
+                 'vm-18'))
+    for item in info.strip().split('|'):
+        item = item.strip()
+        litem = item.lower()
+        if item.isdigit():
+            parsed['year'] = int(item)
+        elif litem in _certs:
+            parsed['certificates'] = item
+        elif 'tv' in litem or 'series' in litem or 'episode' in litem or \
+                'show' in litem or 'video' in litem or 'short' in litem:
+            parsed['kind'] = _KIND_MAP.get(litem, litem)
+        elif '–' in item or '-' in item:
+            item = item.replace('–', '-')
+            parsed['series years'] = item
+        else:
+            dg = _re_duration.match(item)
+            duration = 0
+            if dg:
+                h, m = dg.groups()
+                if h and h.isdigit():
+                    duration += int(h) * 60
+                if m and m.isdigit():
+                    duration += int(m)
+            if duration:
+                parsed['runtimes'] = [duration]
     return parsed
+
+
+def get_votes(votes):
+    """Convert the votes string to an integer."""
+    if votes:
+        match = re.search(r'(\d+)', votes)
+        if match:
+            return int(match.group(1).replace(',', ''))
+    return None
 
 
 class DOMHTMLSearchMovieAdvancedParser(DOMParserBase):
@@ -77,36 +103,33 @@ class DOMHTMLSearchMovieAdvancedParser(DOMParserBase):
         Rule(
             key='data',
             extractor=Rules(
-                foreach='//div[contains(@class, "ipc-title-")]//a',
+                foreach='//li[contains(@class, "ipc-metadata-list-summary-item")]',
                 rules=[
                     Rule(
                         key='link',
-                        extractor=Path('./@href', reduce=reducers.first)
+                        extractor=Path(
+                            './/a[contains(@class, "ipc-title-link-wrapper")]/@href',
+                            reduce=reducers.first
+                        )
                     ),
                     Rule(
                         key='title',
-                        extractor=Path('./h3/text()', reduce=reducers.first)
+                        extractor=Path(
+                            './/a[contains(@class, "ipc-title-link-wrapper")]/h3/text()',
+                            reduce=reducers.first,
+                            transform=cleanup_title
+                        )
                     ),
                     Rule(
                         key='secondary_info',
-                        extractor=Path('./h3/span[@class="lister-item-year text-muted unbold"]/text()',
-                                       reduce=reducers.first)
+                        extractor=Path('.//span[contains(@class, "dli-title-metadata-item")]/text()',
+                                       reduce=reducers.pipe_join)
                     ),
                     Rule(
-                        key='state',
-                        extractor=Path('.//b/text()', reduce=reducers.first)
-                    ),
-                    Rule(
-                        key='certificates',
-                        extractor=Path('.//span[@class="certificate"]/text()',
+                        key='kind',
+                        extractor=Path('.//span[contains(@class, "dli-title-type-data")]/text()',
                                        reduce=reducers.first,
-                                       transform=lambda s: [s])
-                    ),
-                    Rule(
-                        key='runtimes',
-                        extractor=Path('.//span[@class="runtime"]/text()',
-                                       reduce=reducers.first,
-                                       transform=lambda s: [[w for w in s.split() if w.isdigit()][0]])
+                                       transform=lambda x: _KIND_MAP.get(x.lower(), x.lower()))
                     ),
                     Rule(
                         key='genres',
@@ -116,19 +139,19 @@ class DOMHTMLSearchMovieAdvancedParser(DOMParserBase):
                     ),
                     Rule(
                         key='rating',
-                        extractor=Path('.//div[@name="ir"]/@data-value',
+                        extractor=Path('.//span[contains(@class, "ipc-rating-star--rating")]/text()',
                                        reduce=reducers.first,
                                        transform=float)
                     ),
                     Rule(
                         key='votes',
-                        extractor=Path('.//span[@name="nv"]/@data-value',
+                        extractor=Path('.//span[contains(@class, "ipc-rating-star--voteCount")]/text()',
                                        reduce=reducers.first,
-                                       transform=int)
+                                       transform=get_votes)
                     ),
                     Rule(
                         key='metascore',
-                        extractor=Path('.//span[@class="metascore  favorable"]/text()',
+                        extractor=Path('.//span[contains(@class, "metacritic-score-box")]/text()',
                                        reduce=reducers.first,
                                        transform=int)
                     ),
@@ -140,46 +163,41 @@ class DOMHTMLSearchMovieAdvancedParser(DOMParserBase):
                     ),
                     Rule(
                         key='plot',
-                        extractor=Path('./p[@class="text-muted"]//text()',
+                        extractor=Path('.//div[@role="presentation"][@class="ipc-html-content-inner-div"]/text()',
                                        reduce=reducers.clean)
                     ),
                     Rule(
-                        key='directors',
-                        extractor=Rules(
-                            foreach='.//div[@class="DIRECTORS"]/a',
-                            rules=person_rules,
-                            transform=lambda x: build_person(x['name'],
-                                                             personID=analyze_imdbid(x['link']))
-                        )
-                    ),
-                    Rule(
-                        key='cast',
-                        extractor=Rules(
-                            foreach='.//div[@class="STARS"]/a',
-                            rules=person_rules,
-                            transform=lambda x: build_person(x['name'],
-                                                             personID=analyze_imdbid(x['link']))
-                        )
-                    ),
-                    Rule(
                         key='cover url',
-                        extractor=Path('..//a/img/@loadlate')
+                        extractor=Path('//img[contains(@class, "ipc-image")]/@src', reduce=reducers.first)
                     ),
                     Rule(
                         key='episode',
                         extractor=Rules(
                             rules=[
                                 Rule(key='link',
-                                     extractor=Path('./h3/small/a/@href', reduce=reducers.first)),
+                                     extractor=Path('.//div[@ep-title]/a/@href', reduce=reducers.first)),
                                 Rule(key='title',
-                                     extractor=Path('./h3/small/a/text()', reduce=reducers.first)),
+                                     extractor=Path(
+                                         './/div[@ep-title]/a/h3/text()',
+                                         reduce=reducers.first,
+                                         transform=cleanup_title
+                                     )
+                                ),
                                 Rule(key='secondary_info',
-                                     extractor=Path('./h3/small/span[@class="lister-item-year text-muted unbold"]/text()',  # noqa: E501
+                                     extractor=Path('.//span[@class="lister-item-year text-muted unbold"]/text()',  # noqa: E501
                                                     reduce=reducers.first)),
                             ]
                         )
                     )
                 ]
+            )
+        ),
+        Rule(
+            key='__NEXT_DATA__',
+            extractor=Path(
+                '//script[@id="__NEXT_DATA__"]/text()',
+                reduce=reducers.first,
+                transform=lambda x: x.strip()
             )
         )
     ]
@@ -190,18 +208,6 @@ class DOMHTMLSearchMovieAdvancedParser(DOMParserBase):
     def _reset(self):
         self.url = ''
 
-    preprocessors = [
-        (re.compile(r'Directors?:(.*?)(<span|</p>)', re.DOTALL), r'<div class="DIRECTORS">\1</div>\2'),
-        (re.compile(r'Stars?:(.*?)(<span|</p>)', re.DOTALL), r'<div class="STARS">\1</div>\2'),
-        (re.compile(r'(Gross:.*?<span name=)"nv"', re.DOTALL), r'\1"GROSS"'),
-        ('Add a Plot', '<br class="ADD_A_PLOT"/>'),
-        (re.compile(r'(Episode:)(</small>)(.*?)(</h3>)', re.DOTALL), r'\1\3\2\4')
-    ]
-
-    def preprocess_dom(self, dom):
-        preprocessors.remove(dom, '//br[@class="ADD_A_PLOT"]/../..')
-        return dom
-
     def postprocess_data(self, data):
         if 'data' not in data:
             data = {'data': []}
@@ -210,11 +216,10 @@ class DOMHTMLSearchMovieAdvancedParser(DOMParserBase):
             data['data'][:] = data['data'][:results]
 
         result = []
-        idx = 1
-        for movie in data['data']:
-            if not movie["title"].startswith(str(idx) + ". "):
-                continue
-            movie["title"] = movie["title"][len(str(idx)) + 2:]
+        jdata = None
+        if '__NEXT_DATA__' in data:
+            jdata = jsel.select(data['__NEXT_DATA__'], '.props.pageProps.searchResults.titleResults.titleListItems[]')
+        for idx, movie in enumerate(data['data']):
             episode = movie.pop('episode', None)
             if episode is not None:
                 series = build_movie(movie.get('title'), movieID=analyze_imdbid(movie['link']))
@@ -236,9 +241,11 @@ class DOMHTMLSearchMovieAdvancedParser(DOMParserBase):
                 movie.update(secondary)
                 if episode is not None:
                     movie['kind'] = 'episode'
-
+            if jdata:
+                movie_jdata = jsel.select(jdata, '.[%d]' % idx)
+                if movie_jdata:
+                    movie['genres'] = jsel.select(movie_jdata, '.genres[]')
             result.append((analyze_imdbid(movie.pop('link')), movie))
-            idx += 1
         data['data'] = result
 
         return data

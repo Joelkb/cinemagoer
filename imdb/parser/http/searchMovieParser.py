@@ -25,8 +25,6 @@ would be:
 http://www.imdb.com/find?q=the+passion&s=tt
 """
 
-from __future__ import absolute_import, division, print_function, unicode_literals
-
 from imdb.utils import analyze_title, re_m_kind
 
 from .piculet import Path, Rule, Rules, reducers
@@ -66,25 +64,25 @@ class DOMHTMLSearchMovieParser(DOMParserBase):
                 rules=[
                     Rule(
                         key='link',
-                        extractor=Path('.//a[@class="ipc-metadata-list-summary-item__t"]/@href',
+                        extractor=Path('.//a[contains(@class, "ipc-metadata-list-summary-item__t")]/@href',
                                        reduce=reducers.first)
                     ),
                     Rule(
                         key='title',
-                        extractor=Path('.//a[@class="ipc-metadata-list-summary-item__t"]/text()')
+                        extractor=Path('.//a[contains(@class, "ipc-metadata-list-summary-item__t")]/text()')
                     ),
                     Rule(
                         key='year',
-                        extractor=Path('.//span[@class="ipc-metadata-list-summary-item__li"]/text()',
+                        extractor=Path('.//span[contains(@class, "ipc-metadata-list-summary-item__li")]/text()',
                                        reduce=reducers.first)
                     ),
                     Rule(
                         key='kind',
-                        extractor=Path('(.//span[@class="ipc-metadata-list-summary-item__li"])[2]/text()')
+                        extractor=Path('(.//span[contains(@class, "ipc-metadata-list-summary-item__li")])[2]/text()')
                     ),
                     Rule(
                         key='cover url',
-                        extractor=Path('.//img[@class="ipc-image"]/@src')
+                        extractor=Path('.//img[contains(@class, "ipc-image")]/@src')
                     )
                 ],
                 transform=process_title

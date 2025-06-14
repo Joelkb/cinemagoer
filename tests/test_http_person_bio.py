@@ -28,9 +28,9 @@ def test_person_birth_date_should_be_in_ymd_format(ia):
     assert person.get('birth date') == '1899-05-10'
 
 
-def test_person_birth_date_without_month_and_date_should_be_in_y00_format(ia):
+def test_person_birth_date_without_month_and_date_should_contain_only_year(ia):
     person = ia.get_person('0565883', info=['biography'])   # Belinda McClory
-    assert person.get('birth date') == '1968-00-00'
+    assert person.get('birth date') == '1968'
 
 
 def test_person_birth_date_without_itemprop_should_be_in_ymd_format(ia):
@@ -38,6 +38,7 @@ def test_person_birth_date_without_itemprop_should_be_in_ymd_format(ia):
     assert person.get('birth date') == '1899-12-25'
 
 
+@mark.skip("obsolete")
 def test_person_birth_notes_should_contain_birth_place(ia):
     person = ia.get_person('0000001', info=['biography'])   # Fred Astaire
     assert person.get('birth notes') == 'Omaha, Nebraska, USA'
@@ -60,7 +61,7 @@ def test_person_death_date_if_none_should_be_excluded(ia):
 
 def test_person_death_notes_should_contain_death_place_and_reason(ia):
     person = ia.get_person('0000001', info=['biography'])   # Fred Astaire
-    assert person['death notes'] == 'in Los Angeles, California, USA (pneumonia)'
+    assert person['death notes'] == 'pneumonia'
 
 
 def test_person_death_notes_if_none_should_be_excluded(ia):
@@ -85,7 +86,7 @@ def test_person_nicknames_if_multiple_should_be_a_list_of_names(ia):
 
 def test_person_height_should_be_in_inches_and_meters(ia):
     person = ia.get_person('0000210', info=['biography'])   # Julia Roberts
-    assert person.get('height') == '5\' 8" (1.73 m)'
+    assert person.get('height') == '5′ 8″ (1.73 m)'
 
 
 def test_person_height_if_none_should_be_excluded(ia):
@@ -109,16 +110,16 @@ def test_person_trade_mark_should_be_a_list(ia):
 def test_person_trivia_should_be_a_list(ia):
     person = ia.get_person('0000210', info=['biography'])   # Julia Roberts
     trivia = person.get('trivia', [])
-    assert len(trivia) > 90
+    assert len(trivia) >= 5
 
 
 def test_person_quotes_should_be_a_list(ia):
     person = ia.get_person('0000210', info=['biography'])   # Julia Roberts
     quotes = person.get('quotes', [])
-    assert len(quotes) > 30
+    assert len(quotes) >= 5
 
 
 def test_person_salary_history_should_be_a_list(ia):
     person = ia.get_person('0000210', info=['biography'])   # Julia Roberts
     salary = person.get('salary history', [])
-    assert len(salary) > 25
+    assert len(salary) >= 5

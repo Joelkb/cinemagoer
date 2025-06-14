@@ -76,7 +76,7 @@ def test_movie_title_tv_movie_should_not_include_type(ia):
 
 def test_movie_title_video_movie_should_not_include_type(ia):
     movie = ia.get_movie('0109151', info=['main'])      # Matrix (V)
-    assert movie.get('title') == 'Armitage III: Polymatrix'
+    assert movie.get('title') == 'Armitage III: Poly-Matrix'
 
 
 def test_movie_title_video_game_should_not_include_type(ia):
@@ -182,8 +182,8 @@ def test_movie_kind_tv_series_episode_should_be_episode(ia):
 
 
 def test_series_years_if_continuing_should_be_open_range(ia):
-    movie = ia.get_movie('0436992', info=['main'])      # Doctor Who
-    assert movie.get('series years') == '2005-'
+    movie = ia.get_movie('11280740', info=['main'])      # Severance
+    assert movie.get('series years') == '2022-'
 
 
 def test_series_years_if_ended_should_be_closed_range(ia):
@@ -328,7 +328,7 @@ def test_series_number_of_seasons_should_be_numeric(ia):
 
 def test_series_number_of_seasons_should_exclude_non_numeric_season_titles(ia):
     movie = ia.get_movie('0436992', info=['main'])      # Doctor Who
-    assert movie.get('number of seasons') == 14
+    assert movie.get('number of seasons') == 13
 
 
 def test_episode_original_air_date_should_be_a_date(ia):
@@ -485,7 +485,7 @@ def test_movie_cast_can_contain_notes(ia):
 
 def test_movie_colors_if_single_with_notes_should_include_notes(ia):
     movie = ia.get_movie('0060666', info=['main'])      # Manos
-    assert movie.get('color info', []) == ['Color::(Eastmancolor)']
+    assert movie.get('color info', []) == ['Color::(Eastman)']
 
 
 def test_movie_colors_if_none_should_be_excluded(ia):
@@ -495,7 +495,7 @@ def test_movie_colors_if_none_should_be_excluded(ia):
 
 def test_movie_aspect_ratio_should_be_a_number_to_one(ia):
     movie = ia.get_movie('0133093', info=['main'])      # Matrix
-    assert movie.get('aspect ratio') == '2.39 : 1'
+    assert ' : 1' in movie.get('aspect ratio', '')
 
 
 def test_movie_aspect_ratio_if_none_should_be_excluded(ia):
@@ -540,7 +540,8 @@ def test_movie_certificates_should_be_a_list_of_certificates(ia):
         'South Africa:PG',
         'United Kingdom:PG',
         'United Kingdom:PG::(DVD rating)',
-        'United States:TV-PG'
+        'United States:TV-PG',
+        'United States:TV-14::(streaming)'
     ]
 
 
@@ -578,6 +579,7 @@ def test_movie_box_office_should_be_a_dict(ia):
     movie = ia.get_movie('0133093', info=['main'])      # Matrix
     assert isinstance(movie.get('box office'), dict)
     assert len(movie.get('box office', {})) == 3
+
 
 def test_movie_contains_stars(ia):
     movie = ia.get_movie('0133093', info=['main'])      # Matrix

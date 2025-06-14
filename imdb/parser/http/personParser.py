@@ -8,8 +8,7 @@
 #
 # This program is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU General Public License for more details.
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
 # along with this program; if not, write to the Free Software
@@ -30,14 +29,16 @@ biography
 ...and so on.
 """
 
-from __future__ import absolute_import, division, print_function, unicode_literals
-
 import re
 from datetime import datetime
 
 from imdb.utils import analyze_name
 
-from .movieParser import DOMHTMLNewsParser, DOMHTMLOfficialsitesParser, DOMHTMLTechParser
+from .movieParser import (
+    DOMHTMLNewsParser,
+    DOMHTMLOfficialsitesParser,
+    DOMHTMLTechParser,
+)
 from .piculet import Path, Rule, Rules, transformers
 from .utils import DOMParserBase, analyze_imdbid, build_movie, build_person
 
@@ -78,6 +79,13 @@ class DOMHTMLMaindetailsParser(DOMParserBase):
         Rule(
             key='death place',
             extractor=Path('.//a[starts-with(@href, "/search/name?death_place=")]/text()')
+        ),
+        Rule(
+            key='death notes',
+            extractor=Path(
+                './/div[contains(@class, "ipc-html-content-inner-div")]/text()',
+                transform=lambda texts: next((t.strip() for t in texts if t and t.strip().startswith('(')), None)
+            )
         )
     ]
 
@@ -156,15 +164,6 @@ class DOMHTMLMaindetailsParser(DOMParserBase):
         for what in 'birth date', 'death date':
             if what in data and not data[what]:
                 del data[what]
-        # XXX: the code below is for backwards compatibility
-        # probably could be removed
-        for key in list(data.keys()):
-            if key == 'birth place':
-                data['birth notes'] = data[key]
-                del data[key]
-            if key == 'death place':
-                data['death notes'] = data[key]
-                del data[key]
         return data
 
 
@@ -254,6 +253,15 @@ class DOMHTMLFilmographyParser(DOMParserBase):
         return data
 
 
+def extract_notes(notes):
+    """Extracts the notes from the text of the death info."""
+    note_begin_idx = notes.find('(')
+    note_end_idx = notes.rfind(')')
+    if note_begin_idx == -1 or note_end_idx == -1:
+        return ''
+    return notes[note_begin_idx + 1:note_end_idx].strip()
+
+
 class DOMHTMLBioParser(DOMParserBase):
     """Parser for the "biography" page of a given person.
     The page should be provided as a string, as taken from
@@ -277,7 +285,7 @@ class DOMHTMLBioParser(DOMParserBase):
             extractor=Path('.//a[starts-with(@href, "/search/name/?birth_year=")]/text()')
         ),
         Rule(
-            key='birth notes',
+            key='birth place',
             extractor=Path('.//a[starts-with(@href, "/search/name/?birth_place=")]/text()')
         ),
     ]
@@ -289,18 +297,18 @@ class DOMHTMLBioParser(DOMParserBase):
         ),
         Rule(
             key='year',
-            extractor=Path('.//a[contains(@href, "died_year")]/text()')
+            extractor=Path('.//a[starts-with(@href, "/search/name/?death_date=")][2]/text()')
         ),
         Rule(
-            key='death notes',
+            key='death place',
             extractor=Path('.//a[starts-with(@href, "/search/name/?death_place=")]/text()')
         ),
 
         Rule(
             key='death notes',
             extractor=Path(
-                '..//text()',
-                transform=lambda x: _re_spaces.sub(' ', (x or '').strip().split('\n')[-1])
+                './/div[contains(@class, "ipc-html-content-inner-div")]/text()',
+                transform=extract_notes
             )
         )
     ]
@@ -308,7 +316,27 @@ class DOMHTMLBioParser(DOMParserBase):
     rules = [
         Rule(
             key='headshot',
-            extractor=Path('//img[@class="poster"]/@src')
+            extractor=Path('//div[contains(@class, "ipc-poster")]//img[contains(@class, "ipc-image")]/@src')
+        ),
+        Rule(
+            key='birth name',
+            extractor=Path('//li[@id="name"]/div[contains(@class, "ipc-metadata-list-item__content-container")]//div[contains(@class, "ipc-html-content-inner-div")]/text()', transform=lambda x: x.strip())
+        ),
+        Rule(
+            key='nick names',
+            extractor=Rules(
+                foreach='//li[@id="nicknames"]//ul[contains(@class, "ipc-inline-list")]/li/span',
+                rules=[
+                    Rule(
+                        key='nickname',
+                        extractor=Path(
+                            './/text()',
+                            transform=lambda x: x.strip()
+                        )
+                    )
+                ],
+                transform=lambda x: x.get('nickname') or ''
+            )
         ),
         Rule(
             key='birth info',
@@ -325,18 +353,6 @@ class DOMHTMLBioParser(DOMParserBase):
             )
         ),
         Rule(
-            key='nick names',
-            extractor=Path(
-                '//table[@id="overviewTable"]'
-                '//td[starts-with(text(), "Nickname")]/following-sibling::td[1]/text()',
-                reduce=lambda xs: '|'.join(xs),
-                transform=lambda x: [
-                    n.strip().replace(' (', '::(', 1)
-                    for n in x.split('|') if n.strip()
-                ]
-            )
-        ),
-        Rule(
             key='birth name',
             extractor=Path(
                 '//table[@id="overviewTable"]'
@@ -347,8 +363,7 @@ class DOMHTMLBioParser(DOMParserBase):
         Rule(
             key='height',
             extractor=Path(
-                '//table[@id="overviewTable"]'
-                '//td[text()="Height"]/following-sibling::td[1]/text()',
+                '//li[@id="height"]/div[contains(@class, "ipc-metadata-list-item__content-container")]//div[contains(@class, "ipc-html-content-inner-div")]/text()',
                 transform=transformers.strip
             )
         ),
@@ -393,79 +408,88 @@ class DOMHTMLBioParser(DOMParserBase):
         ),
         Rule(
             key='trade mark',
-            extractor=Path(
-                foreach='//div[@class="_imdbpyh4"]/h4[starts-with(text(), "Trade Mark")]'
-                        '/.././div[contains(@class, "soda")]',
-                path='.//text()',
-                transform=transformers.strip
+            extractor=Rules(
+                foreach='//div[@data-testid="sub-section-trademark"]//li[contains(@id, "trademark_")]',
+                rules=[
+                    Rule(
+                        key='trademark',
+                        extractor=Path('.//div[contains(@class, "ipc-html-content-inner-div")]/text()', transform=transformers.strip)
+                    )
+                ],
+                transform=lambda x: x.get('trademark') or ''
             )
         ),
         Rule(
             key='trivia',
-            extractor=Path(
-                foreach='//div[@class="_imdbpyh4"]/h4[starts-with(text(), "Trivia")]'
-                        '/.././div[contains(@class, "soda")]',
-                path='.//text()',
-                transform=transformers.strip
+            extractor=Rules(
+                foreach='//div[@data-testid="sub-section-trivia"]//li[contains(@id, "trivia_")]',
+                rules=[
+                    Rule(
+                        key='trivia_item',
+                        extractor=Path('.//div[contains(@class, "ipc-html-content-inner-div")]/text()', transform=transformers.strip)
+                    )
+                ],
+                transform=lambda x: x.get('trivia_item') or ''
             )
         ),
         Rule(
             key='quotes',
-            extractor=Path(
-                foreach='//div[@class="_imdbpyh4"]/h4[starts-with(text(), "Personal Quotes")]'
-                        '/.././div[contains(@class, "soda")]',
-                path='.//text()',
-                transform=transformers.strip
+            extractor=Rules(
+                foreach='//div[@data-testid="sub-section-quotes"]//li[contains(@id, "quote_")]',
+                rules=[
+                    Rule(
+                        key='quote',
+                        extractor=Path('.//div[contains(@class, "ipc-html-content-inner-div")]/text()', transform=transformers.strip)
+                    )
+                ],
+                transform=lambda x: (x.get('quote') or '').replace('\n', ' ')
             )
         ),
         Rule(
             key='salary history',
             extractor=Rules(
-                foreach='//a[@name="salary"]/following::table[1]//tr',
+                foreach='//div[@data-testid="sub-section-salary"]//li',
                 rules=[
                     Rule(
                         key='title',
-                        extractor=Path('./td[1]//text()')
+                        extractor=Path('.//a/text()', transform=transformers.strip)
                     ),
                     Rule(
                         key='info',
-                        extractor=Path('./td[2]//text()')
+                        extractor=Path('string(.//a/following-sibling::text()[1])', transform=transformers.strip)
                     )
                 ],
-                transform=lambda x: "%s::%s" % (
-                    x.get('title').strip(),
-                    _re_spaces.sub(' ', (x.get('info') or '')).strip())
+                transform=lambda x: "%s %s" % (
+                    (x.get('title') or '').strip(),
+                    (x.get('info') or '').strip().replace(' - ', '::')
+                )
             )
         )
-    ]
-
-    preprocessors = [
-        (re.compile('(<h5>)', re.I), r'</div><div class="_imdbpy">\1'),
-        (re.compile('(<h4)', re.I), r'</div><div class="_imdbpyh4">\1'),
-        (re.compile('(</table>\n</div>\\s+)</div>', re.I + re.DOTALL), r'\1'),
-        (re.compile('(<div id="tn15bot">)'), r'</div>\1'),
-        (re.compile(r'\.<br><br>([^\s])', re.I), r'. \1')
     ]
 
     def postprocess_data(self, data):
         for event in ['birth', 'death']:
             info = data.pop(f'{event} info', {})
-            validity = False
+            monthday = ''
+            year = ''
+            the_date = ''
             if 'monthday' in info:
                 monthday = datetime.strptime(info.pop('monthday'), '%B %d').strftime('%m-%d')
-                validity = True
-            else:
-                monthday = '00-00'
             if 'year' in info:
                 year = info.pop('year')
-                validity = True
-            else:
-                year = '0000'
-
-            if validity:
-                data[f'{event} date'] = f'{year}-{monthday}'
+            if year and monthday:
+                the_date = f'{year}-{monthday}'
+            elif year:
+                the_date = year
+            elif monthday:
+                the_date = monthday
+            if the_date:
+                data[f'{event} date'] = the_date
             data.update(info)
-
+            if 'death notes' in info:
+                data['death notes'] = info['death notes'].strip()
+        if 'nick names' in data and isinstance(data['nick names'], str):
+            data['nick names'] = [data['nick names']]
         return data
 
 
@@ -485,10 +509,15 @@ class DOMHTMLOtherWorksParser(DOMParserBase):
     rules = [
         Rule(
             key='other works',
-            extractor=Path(
-                foreach='//li[@class="ipl-zebra-list__item"]',
-                path='.//text()',
-                transform=transformers.strip
+            extractor=Rules(
+                foreach='//li[contains(@class, "ipc-metadata-list__item") and @data-testid="list-item"]',
+                rules=[
+                    Rule(
+                        key='work',
+                        extractor=Path('.//div[contains(@class, "ipc-html-content-inner-div")]/text()', transform=transformers.strip)
+                    )
+                ],
+                transform=lambda x: x.get('work') or ''
             )
         )
     ]
