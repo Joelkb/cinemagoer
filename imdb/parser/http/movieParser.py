@@ -384,7 +384,7 @@ class DOMHTMLMovieParser(DOMParserBase):
         Rule(
             key='genres',
             extractor=Path(
-                foreach='//td[starts-with(text(), "Genre")]/..//li/a',
+                foreach='//a[contains(@class, "ipc-chip")]/span[contains(@class, "ipc-chip__text")]',
                 path='./text()'
             )
         ),
@@ -414,7 +414,7 @@ class DOMHTMLMovieParser(DOMParserBase):
         Rule(
             key='language',
             extractor=Path(
-                foreach='//td[starts-with(text(), "Language")]/..//li/a',
+                foreach='//li[@data-testid="title-details-languages"]//ul/li/a',
                 path='./text()'
             )
         ),
@@ -696,7 +696,7 @@ class DOMHTMLMovieParser(DOMParserBase):
         ),
         Rule(
             key='cover url',
-            extractor=Path('//img[@alt="Poster"]/@src')
+            extractor=Path('//div[@data-testid="hero-media__poster"]//img/@src')
         ),
         Rule(
             key='imdbID',
